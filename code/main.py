@@ -61,7 +61,8 @@ ex.captured_out_filter = apply_backspaces_and_linefeeds
 # Get name of environment yaml file.
 # Should be specified in command line using
 # 'python main.py with environment.config_file=name_of_env_config_file.yaml'
-environment_yaml = utils.get_environment_yaml(ex)
+# environment_yaml = utils.get_environment_yaml(ex)
+environment_yaml = 'mountainHike.yaml'
 
 # Add defautl.yaml and the <environment_name>.yaml file to the sacred configuration
 DIR = os.path.dirname(sys.argv[0])
@@ -70,7 +71,9 @@ ex.add_config(DIR + '/conf/default.yaml')
 ex.add_config(DIR + '/conf/' + environment_yaml)
 
 from sacred.observers import FileStorageObserver
+
 ex.observers.append(FileStorageObserver.create('saved_runs'))
+
 
 # This function is called by sacred before the experiment is started
 # All args are provided by sacred and filled with configuration values
@@ -108,12 +111,13 @@ def general_config(cuda, algorithm, environment, rl_setting, loss_function, log)
 
     from sys import platform
     if platform == "darwin":
+        pass
         # rl_setting['num_processes'] = 2
-        if environment['config_file'] == 'openaiEnv.yaml':
+        # if environment['config_file'] == 'openaiEnv.yaml':
             # Workaround for bug in openCV on MacOS
             # Problem araises in WarpFrame wrapper in cv2
             # See here: https://github.com/opencv/opencv/issues/5150
-            multiprocessing.set_start_method('spawn')
+            # multiprocessing.set_start_method('spawn')
 
 
 @ex.command(unobserved=True)
@@ -231,14 +235,25 @@ def create_model(envs, algorithm, rl_setting):
     nr_inputs = envs.observation_space.shape[0]
 
     if algorithm['use_particle_filter']:
-        from pf_model import DVRLPolicy
-        # Pass in configuration from algorithm.model AND algorithm.particle_filter
-        model_params = algorithm['model']
-        model_params.update(algorithm['particle_filter'])
-        model = DVRLPolicy(
-            action_space,
-            nr_inputs,
-            **model_params)
+        if not algorithm["method"] == "v2":
+            from pf_model import DVRLPolicy
+            # Pass in configuration from algorithm.model AND algorithm.particle_filter
+            model_params = algorithm['model']
+            model_params.update(algorithm['particle_filter'])
+            model = DVRLPolicy(
+                action_space,
+                nr_inputs,
+                **model_params)
+        else:
+            from pf_model_v2 import DVRLPolicy
+            # Pass in configuration from algorithm.model AND algorithm.particle_filter
+            model_params = algorithm['model']
+            model_params.update(algorithm['particle_filter'])
+            model = DVRLPolicy(
+                action_space,
+                nr_inputs,
+                **model_params)
+
     else:
         from model import RNNPolicy
         # Pass in configuration only from algorithm.model
@@ -246,6 +261,8 @@ def create_model(envs, algorithm, rl_setting):
             action_space,
             nr_inputs,
             **algorithm['model'])
+
+
     return model
 
 
@@ -313,7 +330,7 @@ def run_model(actor_critic, current_memory, envs,
     policy_return = actor_critic(
         current_memory=current_memory,
         predicted_times=predicted_times,
-        )
+    )
 
     # Execute on environment
     cpu_actions = policy_return.action.detach().squeeze(1).cpu().numpy()
@@ -322,14 +339,10 @@ def run_model(actor_critic, current_memory, envs,
         obs = obs / 255.
 
     # Flickering: With probability p_blank, set observation to 0
-    blank_mask = np.random.choice(
-        [0, 1],
-        size=rl_setting['num_processes'],
-        p=[environment['p_blank'], 1-environment['p_blank']])
+    blank_mask = np.random.choice([0, 1], size=rl_setting['num_processes'],
+                                  p=[environment['p_blank'], 1 - environment['p_blank']])
     obs_dims = [1] * len(envs.observation_space.shape)
-    blank_mask = np.reshape(
-        blank_mask,
-        (rl_setting['num_processes'], *obs_dims))
+    blank_mask = np.reshape(blank_mask, (rl_setting['num_processes'], *obs_dims))
     obs = obs * blank_mask
 
     # Make reward into tensor so we can use it as input to model
@@ -343,14 +356,11 @@ def run_model(actor_critic, current_memory, envs,
     current_memory['current_obs'] = torch.from_numpy(obs).float()
 
     # Create new latent states for new episodes
-    current_memory['states'] = actor_critic.vec_conditional_new_latent_state(
-        policy_return.latent_state,
-        masks)
+    current_memory['states'] = actor_critic.vec_conditional_new_latent_state(policy_return.latent_state, masks)
 
     # Set first action to 0 for new episodes
     # Also, if action is discrete, convert it to one-hot vector
-    current_memory['oneHotActions'] = utils.toOneHot(
-        envs.action_space,
+    current_memory['oneHotActions'] = utils.toOneHot(envs.action_space,
         policy_return.action * masks.type(policy_return.action.type()))
 
     current_memory['rewards'][:] = reward
@@ -400,7 +410,7 @@ def save_images(policy_return, old_observation, id_tmp_dir, j, step, _run, log):
 
     for dt, img, p_img in zip(log['predicted_times'],
                               policy_return.predicted_obs_img,
-                              policy_return.particle_obs_img,):
+                              policy_return.particle_obs_img, ):
         utils.save_numpy(
             dir=id_tmp_dir,
             name="update{}_step{}_dt{}.npy".format(j, step, dt),
@@ -482,9 +492,9 @@ def main(_run,
         optimizer = optim.Adam(actor_critic.parameters(), opt['lr'],
                                eps=opt['eps'], betas=opt['betas'])
 
-    obs_loss_coef = algorithm['particle_filter']['obs_loss_coef']\
-                    if algorithm['use_particle_filter']\
-                    else algorithm['model']['obs_loss_coef']
+    obs_loss_coef = algorithm['particle_filter']['obs_loss_coef'] \
+        if algorithm['use_particle_filter'] \
+        else algorithm['model']['obs_loss_coef']
 
     print(actor_critic)
     logging.info('Number of parameters =\t{}'.format(num_parameters))
@@ -500,8 +510,8 @@ def main(_run,
         # Only predict observations sometimes: When predicted_times is a list of ints,
         # predict corresponding future observations, with 0 being the current reconstruction
         if log['save_reconstruction_interval'] > 0 and \
-           float(obs_loss_coef) != 0 and \
-           (j % log['save_reconstruction_interval'] == 0 or j == num_updates - 1):
+                float(obs_loss_coef) != 0 and \
+                (j % log['save_reconstruction_interval'] == 0 or j == num_updates - 1):
             predicted_times = log['predicted_times']
         else:
             predicted_times = None
@@ -536,7 +546,7 @@ def main(_run,
             policy_return = actor_critic(
                 current_memory=current_memory,
                 predicted_times=predicted_times,
-                )
+            )
 
         next_value = policy_return.value_estimate
 

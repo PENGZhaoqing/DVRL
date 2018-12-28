@@ -200,7 +200,7 @@ class DeathValleyEnv(gym.Env):
                     antialiased=True)
         return fig, ax, contour
 
-    def _render(self, mode='human', close=False):
+    def _render(self, mode='2dfig', close=False):
         if close:
             if self.viewer is not None:
                 self.viewer.close()

@@ -100,22 +100,21 @@ class DVRLPolicy(model.Policy):
 
         # Computes p(z_t|h_{t-1}, a_{t-1})
         self.transition_network = VRNN_transition(
-            h_dim=h_dim,
             z_dim=z_dim,
             action_encoding=action_encoding
         )
 
         # Computes h_t=f(h_{t-1}, z_t, a_{t-1}, o_t)
-        self.deterministic_transition_network = VRNN_deterministic_transition(
-            z_dim=z_dim,
-            phi_x_dim=phi_x_dim,
-            h_dim=h_dim,
-            action_encoding=action_encoding
-        )
+        # self.deterministic_transition_network = VRNN_deterministic_transition(
+        #     z_dim=z_dim,
+        #     phi_x_dim=phi_x_dim,
+        #     h_dim=h_dim,
+        #     action_encoding=action_encoding
+        # )
 
         # Computes p(o_t|h_t, z_t, a_{t-1})
         self.emission_network = VRNN_emission(
-            h_dim=h_dim,
+            z_dim=z_dim,
             action_encoding=action_encoding,
             observation_type=observation_type,
             nr_inputs=nr_inputs,
@@ -123,10 +122,9 @@ class DVRLPolicy(model.Policy):
             encoder_batch_norm=encoder_batch_norm
         )
 
-        # Computes q(z_t|h_{t-1}, a_{t-1}, o_t)
+        # Computes q(z_t|z_{t-1}, a_{t-1}, o_t)
         self.proposal_network = VRNN_proposal(
             z_dim=z_dim,
-            h_dim=h_dim,
             phi_x_dim=phi_x_dim,
             action_encoding=action_encoding,
             encoder_batch_norm=encoder_batch_norm
@@ -149,7 +147,7 @@ class DVRLPolicy(model.Policy):
         """
         device = next(self.parameters()).device
         initial_state = st.State(
-            h=torch.zeros(self.batch_size, self.num_particles, self.h_dim).to(device))
+            z=torch.zeros(self.batch_size, self.num_particles, self.z_dim).to(device))
 
         log_weight = torch.zeros(self.batch_size, self.num_particles).to(device)
 
@@ -275,14 +273,6 @@ class DVRLPolicy(model.Policy):
         # reparameterize trick for z
         latent_state = self.sample_from(proposal_state_random_variable)
 
-        # Compute deterministic state h and add to the latent state
-        latent_state = self.deterministic_transition_network(
-            previous_latent_state=previous_latent_state,
-            latent_state=latent_state,
-            observation_states=current_observation,
-            time=0
-        )
-
         # Compute prior probability over z, mean and std
         transition_state_random_variable = self.transition_network(
             previous_latent_state,
@@ -297,12 +287,12 @@ class DVRLPolicy(model.Policy):
             # observation_states
         )
 
-        # p(o_t|h_t, z_t, a_{t-1})
+        # p(o_t|z_t, a_{t-1})
         emission_logpdf = emission_state_random_variable.logpdf(
             current_observation, batch_size, self.num_particles
         )
 
-        # q(z_t|h_{t-1}, a_{t-1}, o_t)
+        # q(z_t| z_{t-1}, o_t, a_{t-1})
         proposal_logpdf = proposal_state_random_variable.logpdf(
             latent_state, batch_size, self.num_particles
         )
@@ -420,10 +410,7 @@ class DVRLPolicy(model.Policy):
         """
         RNN that encodes the set of particles into one latent vector that can be passed to policy.
         """
-        batch_size, num_particles, h_dim = latent_state.h.size()
-        state = torch.cat([latent_state.h,
-                           latent_state.phi_z],
-                          dim=2)
+        batch_size, num_particles, z_dim = latent_state.z.size()
 
         # latent_state.h [batch, particles, h_dim?]
         normalized_log_weights = math.lognormexp(
@@ -433,7 +420,7 @@ class DVRLPolicy(model.Policy):
         )
 
         particle_state = torch.cat(
-            [state,
+            [latent_state.z,
              torch.exp(normalized_log_weights).unsqueeze(-1)],
             dim=2)
 
@@ -517,14 +504,14 @@ class VRNN_encoding(nn.Module):
 
 
 class VRNN_transition(nn.Module):
-    def __init__(self, h_dim, z_dim, action_encoding):
+    def __init__(self, z_dim, action_encoding):
         super().__init__()
         self.prior = nn.Sequential(
-            nn.Linear(h_dim + action_encoding, h_dim),
+            nn.Linear(z_dim + action_encoding, 128),
             nn.ReLU())
-        self.prior_mean = nn.Linear(h_dim, z_dim)
+        self.prior_mean = nn.Linear(128, z_dim)
         self.prior_std = nn.Sequential(
-            nn.Linear(h_dim, z_dim),
+            nn.Linear(128, z_dim),
             nn.Softplus())
         self.action_encoding = action_encoding
 
@@ -536,15 +523,15 @@ class VRNN_transition(nn.Module):
                 `h`     [batch, particles, h_dim]
         """
 
-        batch_size, num_particles, h_dim = previous_latent_state.h.size()
+        batch_size, num_particles, z_dim = previous_latent_state.z.size()
 
         if self.action_encoding > 0:
             input = torch.cat([
-                previous_latent_state.h,
+                previous_latent_state.z,
                 observation_states.encoded_action
-            ], 2).view(-1, h_dim + self.action_encoding)
+            ], 2).view(-1, z_dim + self.action_encoding)
         else:
-            input = previous_latent_state.h.view(-1, h_dim)
+            input = previous_latent_state.h.view(-1, z_dim)
 
         prior_t = self.prior(input)
 
@@ -559,57 +546,15 @@ class VRNN_transition(nn.Module):
 
         return prior_dist
 
-
-class VRNN_deterministic_transition(nn.Module):
-    def __init__(self, z_dim, phi_x_dim, h_dim, action_encoding):
-        super().__init__()
-        self.phi_z = nn.Sequential(
-            nn.Linear(z_dim, h_dim),
-            nn.ReLU())
-        # From phi_z and phi_x_dim
-        self.rnn = nn.GRUCell(h_dim + phi_x_dim + action_encoding, h_dim)
-        self.action_encoding = action_encoding
-
-    def forward(self, previous_latent_state, latent_state, observation_states, time):
-        batch_size, num_particles, z_dim = latent_state.z.size()
-        batch_size, num_particles, phi_x_dim = observation_states.all_phi_x.size()
-        batch_size, num_particles, h_dim = previous_latent_state.h.size()
-
-        phi_x = observation_states.all_phi_x
-
-        phi_z_t = self.phi_z(latent_state.z.view(-1, z_dim)).view(batch_size, num_particles, h_dim)
-
-        if self.action_encoding > 0:
-            input = torch.cat([
-                phi_x,
-                phi_z_t,
-                observation_states.encoded_action
-            ], 2).view(-1, phi_x_dim + h_dim + self.action_encoding)
-        else:
-            input = torch.cat([
-                phi_x,
-                phi_z_t
-            ], 1).view(-1, phi_x_dim + h_dim)
-
-        h = self.rnn(
-            input,
-            previous_latent_state.h.view(-1, h_dim))
-
-        latent_state.phi_z = phi_z_t.view(batch_size, num_particles, -1)
-        # We need [batch, particles, ...] for aesmc resampling!
-        latent_state.h = h.view(batch_size, num_particles, h_dim)
-        return latent_state
-
-
 class VRNN_emission(nn.Module):
-    def __init__(self, h_dim, action_encoding, observation_type, nr_inputs,
+    def __init__(self, z_dim, action_encoding, observation_type, nr_inputs,
                  cnn_channels, encoder_batch_norm):
         super().__init__()
         self.observation_type = observation_type
         self.action_encoding = action_encoding
         # From h and phi_z
 
-        encoding_dimension = h_dim + h_dim + action_encoding
+        encoding_dimension = z_dim + action_encoding
 
         # For observation
         self.dec, self.dec_mean, self.dec_std = encoder_decoder.get_decoder(
@@ -641,15 +586,13 @@ class VRNN_emission(nn.Module):
         Returns: emission_dist [batch-size, num_particles, channels, w, h]
 
         """
-        batch_size, num_particles, phi_z_dim = latent_state.phi_z.size()
-        batch_size, num_particles, h_dim = previous_latent_state.h.size()
+        batch_size, num_particles, z_dim = latent_state.z.size()
 
         # Unsqueeze: Add spatial dimensions
         dec_t = self.linear_obs_decoder(torch.cat([
-            latent_state.phi_z,
-            previous_latent_state.h,
+            latent_state.z,
             observation_states.encoded_action
-        ], 2).view(-1, phi_z_dim + h_dim + self.action_encoding))
+        ], 2).view(-1, z_dim + self.action_encoding))
 
         dec_t = self.dec(dec_t.view(-1, *self.cnn_output_dimension))
 
@@ -678,35 +621,35 @@ class VRNN_emission(nn.Module):
 
 
 class VRNN_proposal(nn.Module):
-    def __init__(self, z_dim, h_dim, phi_x_dim, action_encoding, encoder_batch_norm):
+    def __init__(self, z_dim, phi_x_dim, action_encoding, encoder_batch_norm):
         super().__init__()
 
         if encoder_batch_norm:
             self.enc = nn.Sequential(
-                nn.Linear(h_dim + phi_x_dim + action_encoding, h_dim),
-                nn.BatchNorm1d(h_dim),
+                nn.Linear(z_dim + phi_x_dim + action_encoding, 128),
+                nn.BatchNorm1d(128),
                 nn.ReLU())
         else:
             self.enc = nn.Sequential(
-                nn.Linear(h_dim + phi_x_dim + action_encoding, h_dim),
+                nn.Linear(z_dim + phi_x_dim + action_encoding, 128),
                 nn.ReLU())
-        self.enc_mean = nn.Linear(h_dim, z_dim)
+        self.enc_mean = nn.Linear(128, z_dim)
         self.enc_std = nn.Sequential(
-            nn.Linear(h_dim, z_dim),
+            nn.Linear(128, z_dim),
             nn.Softplus())
 
         self.action_encoding = action_encoding
 
     def forward(self, previous_latent_state, observation_states, time):
         batch_size, num_particles, phi_x_dim = observation_states.all_phi_x.size()
-        batch_size, num_particles, h_dim = previous_latent_state.h.size()
+        batch_size, num_particles, z_dim = previous_latent_state.z.size()
 
         if self.action_encoding > 0:
-            input = torch.cat([observation_states.all_phi_x, previous_latent_state.h,
-                               observation_states.encoded_action], 2).view(-1, phi_x_dim + h_dim + self.action_encoding)
+            input = torch.cat([observation_states.all_phi_x, previous_latent_state.z,
+                               observation_states.encoded_action], 2).view(-1, phi_x_dim + z_dim + self.action_encoding)
         else:
             input = torch.cat([observation_states.all_phi_x,
-                               previous_latent_state.h], 2).view(-1, phi_x_dim + h_dim)
+                               previous_latent_state.h], 2).view(-1, phi_x_dim + z_dim)
 
         enc_t = self.enc(input)
 

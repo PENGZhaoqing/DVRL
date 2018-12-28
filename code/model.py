@@ -229,7 +229,7 @@ class RNNPolicy(Policy):
                     nn.Linear(action_shape, action_encoding),
                     nn.BatchNorm1d(action_encoding),
                     nn.ReLU()
-                )
+            )
             else:
                 self.action_encoder = nn.Sequential(
                     nn.Linear(action_shape, action_encoding),
@@ -289,6 +289,69 @@ class RNNPolicy(Policy):
         self.apply(weights_init(relu_gain))
         if self.dist.__class__.__name__ == "DiagGaussian":
             self.dist.fc_mean.weight.data.mul_(0.01)
+
+    # def encode(self, observation, reward, actions, previous_latent_state, predicted_times):
+    #     """
+    #     Encode the observation and previous_latent_state into the new latent_state.
+    #     Args:
+    #         observation, reward: Last observation and reward recieved from all n_e environments
+    #         actions: Action vector (oneHot for discrete actions)
+    #         previous_latent_state: previous latent state, here a h_dim-dimensional vector
+    #         predicted_times (list of ints): List of timesteps into the future for which predictions
+    #                                         should be returned. Only makes sense if
+    #                                         encoding_loss_coef != 0 and obs_loss_coef != 0
+    #
+    #     Returns:
+    #         latent_state: New latent state
+    #         encoding_loss: Reconstruction loss when prediction current observation X obs_loss_coef
+    #         predicted_obs_loss: Reconstruction loss when prediction current observation
+    #         predicted_observations: Predicted observations (depending on timesteps specified in predicted_times)
+    #         predicted_particles: List of Nones
+    #     """
+    #     x = self.encoder(observation)
+    #     x = x.view(-1, self.cnn_output_number)
+    #
+    #     encoded_actions = None
+    #     if hasattr(self, 'action_encoder'):
+    #         encoded_actions = self.action_encoder(actions)
+    #         encoded_actions = F.relu(encoded_actions)
+    #         x = torch.cat([x, encoded_actions], dim=1)
+    #
+    #     # GRU
+    #     if hasattr(self, 'gru'):
+    #         latent_state = self.gru(x, previous_latent_state)
+    #
+    #     # Compute observation losses
+    #     device = previous_latent_state.device
+    #     predicted_obs_loss = torch.zeros(1).to(device)
+    #
+    #     # RNN: Predict observations/rewards based on previous(!) latent state
+    #     predicted_observations = None
+    #     if self.obs_loss_coef > 0:
+    #         o_dec = self.linear_obs_decoder(
+    #             torch.cat([
+    #                 previous_latent_state,
+    #                 encoded_actions
+    #             ], dim=1)).view(-1, *self.cnn_output_dimension)
+    #         obs_predicted = self.decoder(o_dec)
+    #         predicted_obs_loss = self.obs_criterion(obs_predicted, observation)
+    #
+    #         if predicted_times is not None:
+    #             predicted_observations = self.predict_observations(
+    #                 latent_state,
+    #                 encoded_actions,
+    #                 obs_predicted,
+    #                 predicted_times)
+    #
+    #     # This is only used for DVRL
+    #     predicted_particles = (None if predicted_observations is None
+    #                            else [None] * len(predicted_observations))
+    #
+    #     encoding_loss = (self.obs_loss_coef * predicted_obs_loss)
+    #
+    #     return latent_state, encoding_loss, \
+    #         (torch.tensor(0), predicted_obs_loss), 0,\
+    #         predicted_observations, predicted_particles
 
     def encode(self, observation, reward, actions, previous_latent_state, predicted_times):
         """
@@ -352,6 +415,7 @@ class RNNPolicy(Policy):
         return latent_state, encoding_loss, \
             (torch.tensor(0), predicted_obs_loss), 0,\
             predicted_observations, predicted_particles
+
 
     def predict_observations(self, latent_state, encoded_actions,
                              obs_predicted, predicted_times):

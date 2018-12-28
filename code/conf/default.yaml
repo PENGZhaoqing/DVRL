@@ -42,10 +42,11 @@ loss_function:
   action_loss_coef : 1.
   entropy_coef : 0.01
   value_loss_coef : 0.5
-  encoding_loss_coef: 0.0
+  encoding_loss_coef: 0.5
 
 algorithm:
-  use_particle_filter : False
+  use_particle_filter : True
+  method: "v2"
 
   # BPTT for num_steps * multiplier_backprop_length
   multiplier_backprop_length : 5
