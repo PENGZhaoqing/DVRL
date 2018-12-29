@@ -235,7 +235,7 @@ def create_model(envs, algorithm, rl_setting):
     nr_inputs = envs.observation_space.shape[0]
 
     if algorithm['use_particle_filter']:
-        if not algorithm["method"] == "v2":
+        if not "method" in algorithm:
             from pf_model import DVRLPolicy
             # Pass in configuration from algorithm.model AND algorithm.particle_filter
             model_params = algorithm['model']

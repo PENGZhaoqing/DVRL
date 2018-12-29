@@ -46,7 +46,7 @@ loss_function:
 
 algorithm:
   use_particle_filter : True
-  method: "v2"
+#  method: "v2"
 
   # BPTT for num_steps * multiplier_backprop_length
   multiplier_backprop_length : 5
